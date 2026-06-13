@@ -85,7 +85,7 @@ impl ZellijPlugin for State {
                         for region in &self.click_regions {
                             if col >= region.start_col && col < region.end_col {
                                 if region.is_waiting {
-                                    focus_terminal_pane(region.pane_id, false);
+                                    focus_terminal_pane(region.pane_id, false, false);
                                 } else {
                                     switch_tab_to(region.tab_index as u32 + 1);
                                 }
@@ -198,7 +198,7 @@ impl ZellijPlugin for State {
                 // Notification click — focus the requested pane
                 if let Some(ref payload) = pipe_message.payload {
                     if let Ok(pane_id) = payload.trim().parse::<u32>() {
-                        focus_terminal_pane(pane_id, false);
+                        focus_terminal_pane(pane_id, false, false);
                     }
                 }
                 false

@@ -69,11 +69,11 @@ const ELAPSED_THRESHOLD: u64 = 30;
 const SEPARATOR: &str = "\u{e0b0}";
 
 type Color = (u8, u8, u8);
-const BAR_BG: Color = (30, 30, 46);
-const PREFIX_BG: Color = (60, 50, 80);
-const PREFIX_BG_SETTINGS: Color = (100, 70, 140);
-const TAB_BG_ACTIVE: Color = (140, 100, 200);
-const TAB_BG_INACTIVE: Color = (80, 75, 110);
+const BAR_BG: Color = (35, 37, 43);
+const PREFIX_BG: Color = (42, 44, 50);
+const PREFIX_BG_SETTINGS: Color = (52, 55, 62);
+const TAB_BG_ACTIVE: Color = (60, 100, 65);
+const TAB_BG_INACTIVE: Color = (52, 58, 62);
 const FLASH_BG_BRIGHT: Color = (80, 80, 30);
 
 /// Write a powerline arrow: fg=from_bg, bg=to_bg, then separator char.
@@ -149,7 +149,7 @@ pub fn render_status_bar(state: &mut State, _rows: usize, cols: usize) {
         Some(name) => format!(" ({name})"),
         None => String::new(),
     };
-    let prefix_text = format!(" Zellaude{session_part} ");
+    let prefix_text = format!(" Zellij{session_part} ");
     let prefix_width = display_width(&prefix_text);
     let mode_pill_width = if show_mode { 1 + mode_text.len() + 1 } else { 0 };
     let total_prefix_width = prefix_width + mode_pill_width;
@@ -159,9 +159,9 @@ pub fn render_status_bar(state: &mut State, _rows: usize, cols: usize) {
     if total_prefix_width <= cols {
         let _ = write!(
             buf,
-            "{}{}{BOLD}{prefix_text}{RESET}",
+            "{}{}{prefix_text}{RESET}",
             bg(prefix_bg.0, prefix_bg.1, prefix_bg.2),
-            fg(255, 255, 255),
+            fg(140, 145, 155),
         );
         if show_mode {
             let _ = write!(
@@ -176,9 +176,9 @@ pub fn render_status_bar(state: &mut State, _rows: usize, cols: usize) {
         // Fit the name part but skip mode pill
         let _ = write!(
             buf,
-            "{}{}{BOLD}{prefix_text}{RESET}",
+            "{}{}{prefix_text}{RESET}",
             bg(prefix_bg.0, prefix_bg.1, prefix_bg.2),
-            fg(255, 255, 255),
+            fg(140, 145, 155),
         );
         col = prefix_width;
     } else {
@@ -187,9 +187,9 @@ pub fn render_status_bar(state: &mut State, _rows: usize, cols: usize) {
         let short: String = prefix_text.chars().take(avail).collect();
         let _ = write!(
             buf,
-            "{}{}{BOLD}{short}{RESET}",
+            "{}{}{short}{RESET}",
             bg(prefix_bg.0, prefix_bg.1, prefix_bg.2),
-            fg(255, 255, 255),
+            fg(140, 145, 155),
         );
         col = display_width(&short);
     }
