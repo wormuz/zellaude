@@ -37,7 +37,7 @@ if [ ! -f "$HOOK_SCRIPT" ]; then
   exit 1
 fi
 
-# The hook entry shared by all events
+# The hook entry shared by all events — uses literal ${HOME} for portability
 HOOK_ENTRY=$(jq -nc --arg cmd "$HOOK_CMD" '[{
   "hooks": [{
     "type": "command",
@@ -64,7 +64,7 @@ uninstall() {
 
   backup_settings
 
-  # Remove only zellaude hook entries
+  # Remove only zellaude hook entries (match by suffix to cover all path formats)
   local tmp
   tmp=$(mktemp)
   jq '
