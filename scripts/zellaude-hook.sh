@@ -9,6 +9,27 @@
 [ -z "$ZELLIJ_SESSION_NAME" ] && exit 0
 [ -z "$ZELLIJ_PANE_ID" ] && exit 0
 
+# Run a command with a hard wall-clock limit so a stuck `zellij pipe` (server
+# busy / socket never answers) can never accumulate. Without this, each event
+# leaves an orphaned `zellij pipe` blocked in unix_stream_data_wait, holding a
+# server connection thread; thousands pile up and peg the box. Prefers GNU
+# `timeout` (Linux) or `gtimeout` (macOS coreutils); falls back to a watchdog.
+run_bounded() {
+  local secs=$1; shift
+  if command -v timeout >/dev/null 2>&1; then
+    timeout -k 1 "$secs" "$@"
+  elif command -v gtimeout >/dev/null 2>&1; then
+    gtimeout -k 1 "$secs" "$@"
+  else
+    "$@" &
+    local pid=$!
+    ( sleep "$secs"; kill -9 "$pid" 2>/dev/null ) &
+    local wd=$!
+    wait "$pid" 2>/dev/null
+    kill "$wd" 2>/dev/null
+  fi
+}
+
 # Capture send-time immediately so the plugin can order events
 # that race through parallel hook subprocesses.
 TS_MS=$(jq -nc 'now * 1000 | floor')
@@ -134,5 +155,6 @@ if [ "$HOOK_EVENT" = "PermissionRequest" ]; then
   fi
 fi
 
-# Send to plugin (hook is already async, no need to background)
-zellij pipe --name "zellaude" -- "$PAYLOAD"
+# Send to plugin with a hard timeout — never block/accumulate if the server
+# is slow or the pipe goes unanswered (see run_bounded above).
+run_bounded 3 zellij pipe --name "zellaude" -- "$PAYLOAD"
