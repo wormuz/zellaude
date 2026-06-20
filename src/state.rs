@@ -65,6 +65,19 @@ pub struct ClickRegion {
     pub is_waiting: bool,
 }
 
+#[derive(Clone, Copy)]
+pub enum NavDirection {
+    Left,
+    Right,
+}
+
+/// Clickable ‹ / › arrow shown when the tab bar overflows the terminal width.
+pub struct NavArrow {
+    pub start_col: usize,
+    pub end_col: usize,
+    pub direction: NavDirection,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
 pub enum NotifyMode {
     Never,
@@ -159,6 +172,10 @@ pub struct State {
     pub pane_manifest: Option<PaneManifest>,
     pub active_tab_index: Option<usize>,
     pub click_regions: Vec<ClickRegion>,
+    /// Clickable overflow arrows (populated by the renderer each frame).
+    pub nav_arrows: Vec<NavArrow>,
+    /// Index (in position order) of the leftmost tab shown when the bar overflows.
+    pub tab_scroll_offset: usize,
     /// pane_id -> flash deadline in ms (for waiting animation)
     pub flash_deadlines: HashMap<u32, u64>,
     pub zellij_session_name: Option<String>,

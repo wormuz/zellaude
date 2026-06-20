@@ -1,6 +1,6 @@
 use crate::state::{
     unix_now, unix_now_ms, Activity, ClickRegion, FlashMode, MenuAction, MenuClickRegion,
-    NotifyMode, SessionInfo, SettingKey, State, ViewMode,
+    NavArrow, NavDirection, NotifyMode, SessionInfo, SettingKey, State, ViewMode,
 };
 use std::collections::HashMap;
 use std::fmt::Write;
@@ -106,6 +106,7 @@ fn mode_style(mode: InputMode) -> (Color, &'static str) {
 pub fn render_status_bar(state: &mut State, _rows: usize, cols: usize) {
     state.click_regions.clear();
     state.menu_click_regions.clear();
+    state.nav_arrows.clear();
 
     let mut buf = String::with_capacity(cols * 4);
     // Terminal setup for a 1-row status bar:
@@ -299,16 +300,47 @@ fn render_tabs(
         0
     };
 
+    // Overflow navigation: when the tabs don't all fit, show clickable ‹ / ›
+    // arrows and scroll the visible window. Auto-follow keeps the active tab in
+    // view when it is switched from the keyboard.
+    let active_idx = tabs.iter().position(|t| t.active);
+    let mut offset = state.tab_scroll_offset.min(count.saturating_sub(1));
+    if let Some(a) = active_idx {
+        if a < offset {
+            offset = a; // active scrolled off the left — snap back to it
+        }
+    }
+
     let mut prev_bg = prefix_bg;
 
-    for (i, tab) in tabs.iter().enumerate() {
+    // Left arrow when tabs are hidden to the left.
+    if offset > 0 {
+        arrow(buf, col, prev_bg, BAR_BG);
+        let start = *col;
+        let _ = write!(buf, "{} ‹ ", fg(180, 175, 195));
+        *col += 3;
+        state.nav_arrows.push(NavArrow {
+            start_col: start,
+            end_col: *col,
+            direction: NavDirection::Left,
+        });
+        prev_bg = BAR_BG;
+    }
+
+    let mut last_rendered = offset.saturating_sub(1);
+    let mut overflowed = false;
+    for (i, tab) in tabs.iter().enumerate().skip(offset) {
         let sessions = &sessions_per_tab[i];
         let tab_overhead = if sessions.is_empty() { 2 } else { 2 + 2 * sessions.len() };
 
         let arrows_needed = if prev_bg == prefix_bg { 1 } else { 2 };
-        if *col + arrows_needed + tab_overhead.max(3) > cols {
+        // Reserve room for a right arrow (3 cols) when more tabs follow.
+        let right_reserve = if i + 1 < count { 3 } else { 0 };
+        if *col + arrows_needed + tab_overhead.max(3) + right_reserve > cols {
+            overflowed = true;
             break;
         }
+        last_rendered = i;
 
         let is_agent = !sessions.is_empty();
         let tab_name = &tab.name;
@@ -459,10 +491,30 @@ fn render_tabs(
         prev_bg = tab_bg;
     }
 
-    // Arrow from last tab → bar background (only if we rendered any tabs)
-    if prev_bg != prefix_bg || count > 0 {
+    // Right arrow when tabs overflowed off the right edge.
+    if overflowed {
+        arrow(buf, col, prev_bg, BAR_BG);
+        let start = *col;
+        let _ = write!(buf, "{} › ", fg(180, 175, 195));
+        *col += 3;
+        state.nav_arrows.push(NavArrow {
+            start_col: start,
+            end_col: *col,
+            direction: NavDirection::Right,
+        });
+        // Auto-follow: if the active tab is hidden to the right, scroll toward it
+        // (corrects on the next render frame, which a tab switch triggers).
+        if let Some(a) = active_idx {
+            if a > last_rendered {
+                offset = (offset + (a - last_rendered)).min(count.saturating_sub(1));
+            }
+        }
+    } else if prev_bg != prefix_bg || count > 0 {
+        // Arrow from last tab → bar background (only if we rendered any tabs)
         arrow(buf, col, prev_bg, BAR_BG);
     }
+
+    state.tab_scroll_offset = offset;
 }
 
 fn notify_mode_label(mode: NotifyMode) -> (&'static str, &'static str, String, String) {
