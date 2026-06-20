@@ -95,6 +95,21 @@ impl ZellijPlugin for State {
 
                 match self.view_mode {
                     ViewMode::Normal => {
+                        // Overflow arrows take priority over tab click regions.
+                        for nav in &self.nav_arrows {
+                            if col >= nav.start_col && col < nav.end_col {
+                                match nav.direction {
+                                    state::NavDirection::Left => {
+                                        self.tab_scroll_offset =
+                                            self.tab_scroll_offset.saturating_sub(1);
+                                    }
+                                    state::NavDirection::Right => {
+                                        self.tab_scroll_offset += 1;
+                                    }
+                                }
+                                return true;
+                            }
+                        }
                         for region in &self.click_regions {
                             if col >= region.start_col && col < region.end_col {
                                 if region.is_waiting {
