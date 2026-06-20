@@ -30,41 +30,40 @@ run_bounded() {
   fi
 }
 
-# Capture send-time immediately so the plugin can order events
-# that race through parallel hook subprocesses.
-TS_MS=$(jq -nc 'now * 1000 | floor')
-
-# Read hook JSON from stdin
+# Single jq pass: parse stdin once and emit a tab-separated line of
+# hook_event, tool_name (for the shell branches below) and the compact
+# payload JSON. Previously this forked jq 6× per event — on a busy session
+# that flood of short-lived processes hammers per-exec monitors (opensnitch)
+# and the scheduler. ts_ms (event ordering, ms granularity) is taken inside
+# the same jq via `now`; the cost vs capturing pre-read is sub-millisecond.
 INPUT=$(cat)
-
-# Extract fields with jq (required dependency)
-HOOK_EVENT=$(echo "$INPUT" | jq -r '.hook_event_name // empty')
-SESSION_ID=$(echo "$INPUT" | jq -r '.session_id // empty')
-TOOL_NAME=$(echo "$INPUT" | jq -r '.tool_name // empty')
-CWD=$(echo "$INPUT" | jq -r '.cwd // empty')
+# Field order matters: PAYLOAD (always non-empty, no tabs) and HOOK_EVENT come
+# first; TOOL_NAME is last because it can be empty and tab is IFS-whitespace,
+# so a trailing empty field collapses to an empty TOOL_NAME instead of shifting.
+IFS=$'\t' read -r PAYLOAD HOOK_EVENT TOOL_NAME < <(
+  printf '%s' "$INPUT" | jq -rc \
+    --arg pane_id "$ZELLIJ_PANE_ID" \
+    --arg zellij_session "$ZELLIJ_SESSION_NAME" \
+    --arg term_program "${TERM_PROGRAM:-}" \
+    '
+    (.hook_event_name // "") as $ev |
+    (.tool_name // "") as $tool |
+    [ ({
+        pane_id: ($pane_id | tonumber),
+        session_id: (.session_id // ""),
+        hook_event: $ev,
+        tool_name: (if $tool == "" then null else $tool end),
+        cwd: (.cwd // null),
+        zellij_session: $zellij_session,
+        term_program: (if $term_program == "" then null else $term_program end),
+        ts_ms: (now * 1000 | floor)
+      } | @json),
+      $ev,
+      $tool
+    ] | @tsv'
+)
 
 [ -z "$HOOK_EVENT" ] && exit 0
-
-# Build compact JSON payload
-PAYLOAD=$(jq -nc \
-  --arg pane_id "$ZELLIJ_PANE_ID" \
-  --arg session_id "$SESSION_ID" \
-  --arg hook_event "$HOOK_EVENT" \
-  --arg tool_name "$TOOL_NAME" \
-  --arg cwd "$CWD" \
-  --arg zellij_session "$ZELLIJ_SESSION_NAME" \
-  --arg term_program "${TERM_PROGRAM:-}" \
-  --arg ts_ms "$TS_MS" \
-  '{
-    pane_id: ($pane_id | tonumber),
-    session_id: $session_id,
-    hook_event: $hook_event,
-    tool_name: (if $tool_name == "" then null else $tool_name end),
-    cwd: (if $cwd == "" then null else $cwd end),
-    zellij_session: $zellij_session,
-    term_program: (if $term_program == "" then null else $term_program end),
-    ts_ms: ($ts_ms | tonumber)
-  }')
 
 # Permission request: bell + desktop notification
 if [ "$HOOK_EVENT" = "PermissionRequest" ]; then
