@@ -5,6 +5,10 @@
 # Usage in ~/.claude/settings.json hooks:
 #   "command": "/path/to/zellaude-hook.sh"
 
+# Ensure zellij is on PATH — cargo install puts it in ~/.cargo/bin which is
+# not inherited by Claude Code hook processes spawned as bash subprocesses
+export PATH="$HOME/.cargo/bin:$PATH"
+
 # Exit silently if not running inside Zellij
 [ -z "$ZELLIJ_SESSION_NAME" ] && exit 0
 [ -z "$ZELLIJ_PANE_ID" ] && exit 0
