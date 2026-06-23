@@ -1,5 +1,7 @@
 mod event_handler;
+#[cfg(not(test))]
 mod installer;
+mod palette;
 mod render;
 mod state;
 mod tab_pane_map;
