@@ -52,8 +52,14 @@ EVENTS='["PreToolUse","PostToolUse","PostToolUseFailure","UserPromptSubmit","Per
 
 backup_settings() {
   if [ -f "$SETTINGS" ]; then
-    cp "$SETTINGS" "$SETTINGS.bak"
-    echo "Backed up $SETTINGS to $SETTINGS.bak"
+    # Timestamped: settings.json usually carries hooks owned by other tools, so
+    # a single reused .bak silently decays into a snapshot that predates them.
+    # Restoring from it then removes those hooks with no error anywhere.
+    local stamp backup
+    stamp=$(date +%Y%m%d-%H%M%S)
+    backup="$SETTINGS.bak.$stamp"
+    cp "$SETTINGS" "$backup"
+    echo "Backed up $SETTINGS to $backup"
   fi
 }
 

@@ -65,8 +65,14 @@ if [ ! -f "$SETTINGS" ]; then
   echo '{}' > "$SETTINGS"
 fi
 
-# Back up settings before modifying
-cp "$SETTINGS" "$SETTINGS.bak"
+# Back up settings before modifying. Timestamped, because settings.json
+# usually carries hooks owned by other tools: a single reused .bak silently
+# decays into a snapshot that predates them, and restoring from it drops those
+# hooks with no error anywhere. Keep the 10 most recent.
+cp "$SETTINGS" "$SETTINGS.bak.$(date +%Y%m%d-%H%M%S)"
+ls -1t "$SETTINGS".bak.* 2>/dev/null | tail -n +11 | while IFS= read -r old; do
+  rm -f "$old"
+done
 
 # Remove ALL existing zellaude hook entries (any path ending in zellaude-hook.sh)
 tmp=$(mktemp)
