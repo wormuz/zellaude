@@ -13,6 +13,12 @@ export PATH="$HOME/.cargo/bin:$PATH"
 [ -z "$ZELLIJ_SESSION_NAME" ] && exit 0
 [ -z "$ZELLIJ_PANE_ID" ] && exit 0
 
+# Pane ids are numbered per session, so anything keyed on the pane alone
+# collides across sessions: pane 5 in two sessions would share one rate-limit
+# lock and silently swallow the other's permission notification. Sanitized for
+# use in filenames.
+PANE_KEY="${ZELLIJ_SESSION_NAME//[^a-zA-Z0-9_-]/_}-${ZELLIJ_PANE_ID}"
+
 # Run a command with a hard wall-clock limit so a stuck `zellij pipe` (server
 # busy / socket never answers) can never accumulate. Without this, each event
 # leaves an orphaned `zellij pipe` blocked in unix_stream_data_wait, holding a
@@ -125,7 +131,7 @@ if [ "$HOOK_EVENT" = "PermissionRequest" ]; then
     MESSAGE="Permission requested${TOOL_SUFFIX}"
 
     # Rate-limit: one notification per pane per 10 seconds
-    LOCK="/tmp/zellaude-notify-${ZELLIJ_PANE_ID}"
+    LOCK="/tmp/zellaude-notify-${PANE_KEY}"
     NOW=$(date +%s)
     LAST=0
     [ -f "$LOCK" ] && LAST=$(cat "$LOCK" 2>/dev/null)
@@ -143,7 +149,7 @@ if [ "$HOOK_EVENT" = "PermissionRequest" ]; then
             terminal-notifier \
               -title "$TITLE" \
               -message "$MESSAGE" \
-              -group "zellaude-permission-${ZELLIJ_PANE_ID}" \
+              -group "zellaude-permission-${PANE_KEY}" \
               -execute "$FOCUS_CMD" &
           else
             osascript -e "display notification \"$MESSAGE\" with title \"$TITLE\"" &
@@ -170,13 +176,13 @@ case "$HOOK_EVENT" in
     case "$(uname)" in
       Darwin)
         if command -v terminal-notifier >/dev/null 2>&1; then
-          terminal-notifier -remove "zellaude-permission-${ZELLIJ_PANE_ID}" >/dev/null 2>&1
+          terminal-notifier -remove "zellaude-permission-${PANE_KEY}" >/dev/null 2>&1
         fi
         ;;
       # Linux: notify-send offers no group-remove; left for a follow-up.
     esac
     # Reset the rate-limit so the next request can notify without the 10s delay.
-    rm -f "/tmp/zellaude-notify-${ZELLIJ_PANE_ID}" 2>/dev/null || true
+    rm -f "/tmp/zellaude-notify-${PANE_KEY}" 2>/dev/null || true
     ;;
 esac
 
