@@ -142,11 +142,22 @@ pub fn render_status_bar(state: &mut State, _rows: usize, cols: usize) {
     let pal = state.palette;
 
     let mut buf = String::with_capacity(cols * 4);
-    // Terminal setup for a 1-row status bar:
-    //  \x1b[H     — cursor home (prevent scroll from cursor at end-of-line)
-    //  \x1b[?7l   — disable auto-wrap (clip overflow instead of scroll)
-    //  \x1b[?25l  — hide cursor
-    buf.push_str("\x1b[H\x1b[?7l\x1b[?25l");
+    // No terminal setup here on purpose. This used to emit
+    // "\x1b[H\x1b[?7l\x1b[?25l" on every render — cursor home, auto-wrap off,
+    // cursor hidden — and never restored any of it: the codebase had no
+    // \x1b[?7h or \x1b[?25h anywhere.
+    //
+    // DECRST is a mode change, not a local style. Whoever turns a mode off
+    // owns turning it back on, and a status bar redrawing on a 1s timer
+    // (0.25s while flashing) has no business owning global terminal state.
+    // Left off, auto-wrap stays disabled for the whole terminal, so long
+    // output in an unrelated pane overwrites its last column instead of
+    // wrapping, and the cursor can stay hidden after focus moves away.
+    //
+    // None of it was needed: zellij composites plugin output into the region
+    // it allocated and handles clipping and cursor visibility there. \x1b[H
+    // was actively harmful — the plugin does not position itself, and moving
+    // the physical cursor fights the compositor's own tracking.
     let bar_bg_str = bgc(pal.bar_bg);
 
     // Bail early if terminal is too narrow
