@@ -18,9 +18,15 @@ const MAX_TAB_TITLE: usize = 40;
 
 /// Strip control characters and clamp length before using a pane title as a tab
 /// name. The status bar truncates further for display; this just bounds it.
+///
+/// Leading non-alphanumeric glyphs are dropped: Claude Code prefixes its OSC
+/// title with an animated spinner (✳ ◐ ◑ ◒ …) that changes every frame. Keeping
+/// it would make the sanitized title differ on each frame → rename_tab →
+/// TabUpdate → full tab-bar redraw, i.e. the visible flicker while Claude works.
 fn sanitize_tab_title(raw: &str) -> String {
     raw.chars()
         .filter(|c| !c.is_control())
+        .skip_while(|c| !c.is_alphanumeric())
         .collect::<String>()
         .trim()
         .chars()
@@ -29,6 +35,23 @@ fn sanitize_tab_title(raw: &str) -> String {
 }
 
 register_plugin!(State);
+
+#[cfg(test)]
+mod tests {
+    use super::sanitize_tab_title;
+
+    #[test]
+    fn spinner_frames_sanitize_to_same_title() {
+        for spinner in ["✳", "◐", "◑", "◒", "·"] {
+            assert_eq!(
+                sanitize_tab_title(&format!("{spinner} Fix flicker")),
+                "Fix flicker"
+            );
+        }
+        assert_eq!(sanitize_tab_title("◑ Діагностика миготіння"), "Діагностика миготіння");
+        assert_eq!(sanitize_tab_title("✳✶✻"), "");
+    }
+}
 
 impl ZellijPlugin for State {
     fn load(&mut self, configuration: BTreeMap<String, String>) {
@@ -216,6 +239,7 @@ impl ZellijPlugin for State {
                     self.load_config();
                 }
                 // Auto-install hook script and register Claude Code hooks
+                #[cfg(not(test))]
                 if !self.hooks_installed {
                     installer::run_install();
                 }
