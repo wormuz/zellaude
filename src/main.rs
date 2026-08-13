@@ -3,11 +3,15 @@ mod event_handler;
 mod installer;
 mod palette;
 mod render;
+mod rename_guard;
 mod state;
 mod tab_pane_map;
 
 use palette::{Palette, ThemeSource};
-use state::{unix_now, unix_now_ms, HookPayload, MenuAction, SessionInfo, Settings, State, ViewMode};
+use state::{
+    unix_now, unix_now_ms, HookPayload, MenuAction, PendingRename, SessionInfo, Settings, State,
+    ViewMode,
+};
 use std::collections::{BTreeMap, HashMap};
 use zellij_tile::prelude::*;
 
@@ -15,6 +19,10 @@ const DONE_TIMEOUT: u64 = 30;
 const TIMER_INTERVAL: f64 = 1.0;
 const FLASH_TICK: f64 = 0.25;
 const MAX_TAB_TITLE: usize = 40;
+/// Minimum gap between tab-rename batches. See `apply_tab_titles`.
+const RENAME_COOLDOWN_MS: u64 = 400;
+/// How many times a single desired rename is re-issued before being abandoned.
+const RENAME_MAX_ATTEMPTS: u8 = 3;
 
 /// Strip control characters and clamp length before using a pane title as a tab
 /// name. The status bar truncates further for display; this just bounds it.
@@ -334,17 +342,48 @@ impl State {
 
     /// When enabled, name each Claude tab after its pane's title (the OSC title
     /// the program set). Unopinionated: the label content is whatever set the
-    /// pane title; zellaude only mirrors it onto the tab. Renames only when the
-    /// desired name differs from the current tab name, so it converges after the
-    /// resulting TabUpdate and never loops.
+    /// pane title; zellaude only mirrors it onto the tab.
+    ///
+    /// # Why this is defensive
+    ///
+    /// `rename_tab` addresses a tab by 1-based *position*, and zellij has no
+    /// stable per-tab identifier to use instead. Upstream bug
+    /// `zellij-org/zellij#3535` makes the server's idea of tab positions drift
+    /// from the plugin's after tabs are closed, so a rename can land on the
+    /// wrong tab or on no tab at all ("Failed to find tab with index"). A
+    /// rename that never lands leaves `tab.name` unchanged, which the naive
+    /// "rename whenever desired != current" rule reads as "still needs
+    /// renaming" — re-issuing it on every `TabUpdate`/`PaneUpdate`. Since each
+    /// rename attempt itself provokes a `TabUpdate`, that is a feedback loop.
+    ///
+    /// Three independent brakes, so no single failure can spin:
+    ///
+    /// 1. **Stale-position guard.** A rename is only issued when the plugin's
+    ///    view of the tab is internally consistent (the position indexes back
+    ///    to the same tab). This is what stops writes landing on the wrong tab.
+    /// 2. **Bounded retries.** Each desired rename is tracked as a
+    ///    `PendingRename`; if it does not land within `RENAME_MAX_ATTEMPTS`, it
+    ///    is abandoned rather than retried forever.
+    /// 3. **Rate limit.** At most one rename batch per `RENAME_COOLDOWN_MS`.
+    ///
+    /// Worst case under this scheme is a tab that keeps its old label, never a
+    /// crash. The brakes stay while `#3535` is open upstream.
     fn apply_tab_titles(&mut self) {
         if !self.settings.tab_titles {
+            self.pending_renames.clear();
             return;
         }
         let titles = match self.pane_manifest {
             Some(ref manifest) => tab_pane_map::build_pane_titles(manifest),
             None => return,
         };
+
+        // Brake 3: rate limit. Renames are cosmetic, so dropping a batch costs
+        // nothing but a slightly stale label until the next update.
+        let now_ms = unix_now_ms();
+        if now_ms.saturating_sub(self.last_rename_ms) < RENAME_COOLDOWN_MS {
+            return;
+        }
 
         // Pick the most recently active Claude session per tab as the title source.
         let mut best: HashMap<usize, &SessionInfo> = HashMap::new();
@@ -359,20 +398,76 @@ impl State {
             }
         }
 
-        let mut renames: Vec<(u32, String)> = Vec::new();
-        for tab in &self.tabs {
-            if let Some(session) = best.get(&tab.position) {
-                if let Some(title) = titles.get(&session.pane_id) {
-                    let desired = sanitize_tab_title(title);
-                    if !desired.is_empty() && desired != tab.name {
-                        renames.push((tab.position as u32 + 1, desired));
-                    }
-                }
+        // Retire pending renames that have landed, or whose tab is gone. Keyed
+        // by the pre-rename name, which is what we can still match on.
+        let live_names: std::collections::HashSet<&str> =
+            self.tabs.iter().map(|t| t.name.as_str()).collect();
+        self.pending_renames.retain(|observed_name, pending| {
+            // Landed: the desired name is now present in the tab list.
+            if live_names.contains(pending.desired.as_str()) {
+                return false;
             }
+            // Tab vanished (closed, or renamed by someone else) — stop tracking.
+            if !live_names.contains(observed_name.as_str()) {
+                return false;
+            }
+            true
+        });
+
+        let mut renames: Vec<(u32, String, String)> = Vec::new();
+        for (index_in_list, tab) in self.tabs.iter().enumerate() {
+            // Brake 1: stale-position guard.
+            if !rename_guard::position_is_addressable(tab.position, index_in_list) {
+                continue;
+            }
+
+            let Some(session) = best.get(&tab.position) else {
+                continue;
+            };
+            let Some(title) = titles.get(&session.pane_id) else {
+                continue;
+            };
+            let desired = sanitize_tab_title(title);
+            if desired.is_empty() || desired == tab.name {
+                continue;
+            }
+
+            // Brake 2: bounded retries. Once exhausted, leave the tab with its
+            // current name rather than re-issuing forever.
+            let prior = self.pending_renames.get(&tab.name);
+            if rename_guard::rename_budget_exhausted(
+                prior.map(|p| p.desired.as_str()),
+                &desired,
+                prior.map_or(0, |p| p.attempts),
+                RENAME_MAX_ATTEMPTS,
+            ) {
+                continue;
+            }
+
+            renames.push((tab.position as u32 + 1, desired, tab.name.clone()));
         }
 
-        for (tab_position, name) in renames {
-            rename_tab(tab_position, name);
+        if renames.is_empty() {
+            return;
+        }
+        self.last_rename_ms = now_ms;
+
+        for (tab_position, desired, observed_name) in renames {
+            let entry = self
+                .pending_renames
+                .entry(observed_name)
+                .or_insert_with(|| PendingRename {
+                    desired: desired.clone(),
+                    attempts: 0,
+                });
+            if entry.desired != desired {
+                // Target changed since the last attempt — restart the budget.
+                entry.desired = desired.clone();
+                entry.attempts = 0;
+            }
+            entry.attempts = entry.attempts.saturating_add(1);
+
+            rename_tab(tab_position, desired);
         }
     }
 

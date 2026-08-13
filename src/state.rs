@@ -160,6 +160,17 @@ pub enum MenuAction {
     CloseMenu,
 }
 
+/// A tab rename zellaude has issued but not yet seen reflected in a TabUpdate.
+///
+/// Tracked so a rename that never lands (see the `#3535` note on
+/// `apply_tab_titles`) is retried a bounded number of times and then abandoned,
+/// instead of being re-issued on every event forever.
+#[derive(Debug, Clone)]
+pub struct PendingRename {
+    pub desired: String,
+    pub attempts: u8,
+}
+
 pub struct MenuClickRegion {
     pub start_col: usize,
     pub end_col: usize,
@@ -197,4 +208,9 @@ pub struct State {
     pub palette_overrides: Vec<(PaletteRole, Color)>,
     /// The most recent Zellij theme seen via `ModeUpdate`.
     pub host_styling: Option<Styling>,
+    /// In-flight tab renames, keyed by the tab name observed when the rename was
+    /// issued. See `PendingRename` and `apply_tab_titles`.
+    pub pending_renames: HashMap<String, PendingRename>,
+    /// Wall-clock ms of the last rename batch, used to rate-limit renames.
+    pub last_rename_ms: u64,
 }
