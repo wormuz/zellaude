@@ -213,4 +213,6 @@ pub struct State {
     pub pending_renames: HashMap<String, PendingRename>,
     /// Wall-clock ms of the last rename batch, used to rate-limit renames.
     pub last_rename_ms: u64,
+    pub own_plugin_id: u32,
+    pub pending_close: Option<crate::close::PendingClose>,
 }
