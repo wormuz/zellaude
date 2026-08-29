@@ -19,6 +19,7 @@ dim()   { printf '\033[2m%s\033[0m\n' "$*"; }
 if [ "${1:-}" = "--uninstall" ]; then
     echo "Uninstalling zellaude..."
     rm -f "$PLUGIN_PATH" && dim "  removed $PLUGIN_PATH"
+    rm -f "$PLUGIN_DIR/zellaude-close.sh" && dim "  removed $PLUGIN_DIR/zellaude-close.sh"
     "$PROJECT_DIR/scripts/install-hooks.sh" --uninstall
     green "Done. Restart Zellij to take effect."
     exit 0
@@ -63,6 +64,9 @@ cargo build --release --manifest-path "$PROJECT_DIR/Cargo.toml" 2>&1 | tail -1
 mkdir -p "$PLUGIN_DIR"
 cp "$PROJECT_DIR/target/wasm32-wasip1/release/zellaude.wasm" "$PLUGIN_PATH"
 dim "  installed $PLUGIN_PATH"
+cp "$PROJECT_DIR/scripts/zellaude-close.sh" "$PLUGIN_DIR/zellaude-close.sh"
+chmod +x "$PLUGIN_DIR/zellaude-close.sh"
+dim "  installed $PLUGIN_DIR/zellaude-close.sh"
 
 # ── Install hooks ──────────────────────────────────────────
 

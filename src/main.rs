@@ -1,3 +1,4 @@
+mod close;
 mod event_handler;
 #[cfg(not(test))]
 mod installer;
@@ -13,6 +14,7 @@ use state::{
     ViewMode,
 };
 use std::collections::{BTreeMap, HashMap};
+use close::{CloseRequest, CloseScope};
 use zellij_tile::prelude::*;
 
 const DONE_TIMEOUT: u64 = 30;
@@ -41,6 +43,7 @@ fn sanitize_tab_title(raw: &str) -> String {
         .take(MAX_TAB_TITLE)
         .collect()
 }
+const CLOSE_GRACE_MS: u64 = 10_000;
 
 register_plugin!(State);
 
@@ -69,7 +72,9 @@ impl ZellijPlugin for State {
             PermissionType::RunCommands,
             PermissionType::ReadCliPipes,
             PermissionType::MessageAndLaunchOtherPlugins,
+            PermissionType::WriteToStdin,
         ]);
+        self.own_plugin_id = get_plugin_ids().plugin_id;
         subscribe(&[
             EventType::TabUpdate,
             EventType::PaneUpdate,
@@ -112,6 +117,10 @@ impl ZellijPlugin for State {
             Event::PaneUpdate(manifest) => {
                 self.pane_manifest = Some(manifest);
                 self.rebuild_pane_map();
+                if let Some(pc) = &mut self.pending_close {
+                    pc.awaiting.retain(|id| self.pane_to_tab.contains_key(id));
+                }
+                self.settle_close();
                 true
             }
             Event::ModeUpdate(mode_info) => {
@@ -225,6 +234,13 @@ impl ZellijPlugin for State {
                 }
             }
             Event::Timer(_) => {
+                if self
+                    .pending_close
+                    .as_ref()
+                    .map_or(false, |pc| unix_now_ms() >= pc.deadline_ms)
+                {
+                    self.finish_close();
+                }
                 let stale_changed = self.cleanup_stale_sessions();
                 let flash_changed = self.cleanup_expired_flashes();
                 let has_flashes = self.has_active_flashes();
@@ -277,6 +293,19 @@ impl ZellijPlugin for State {
                 if let Some(ref payload) = pipe_message.payload {
                     if let Ok(pane_id) = payload.trim().parse::<u32>() {
                         focus_terminal_pane(pane_id, false, false);
+                    }
+                }
+                false
+            }
+            "zellaude:close" => {
+                let req = CloseRequest::parse(pipe_message.payload.as_deref());
+                self.start_close(req);
+                false
+            }
+            "zellaude:exec-close" => {
+                if let Some(ref p) = pipe_message.payload {
+                    if let Ok(tab) = p.trim().parse::<usize>() {
+                        self.exec_tab_close(tab);
                     }
                 }
                 false
@@ -581,6 +610,92 @@ impl State {
         let mut ctx = BTreeMap::new();
         ctx.insert("type".into(), "save_config".into());
         run_command(&["sh", "-c", &cmd], ctx);
+    }
+
+    fn start_close(&mut self, req: CloseRequest) {
+        if self.pending_close.is_some() {
+            return;
+        }
+        let Some(manifest) = &self.pane_manifest else {
+            return;
+        };
+        let Some(target_pane) = req.pane_id else {
+            return;
+        };
+        let Some(target_tab) = close::tab_of_terminal(manifest, target_pane) else {
+            return;
+        };
+        if close::brain(manifest, target_tab) != Some(self.own_plugin_id) {
+            return;
+        }
+        let Some(pc) = close::plan_close(
+            req.scope,
+            manifest,
+            target_tab,
+            Some(target_pane),
+            |id| self.sessions.contains_key(&id),
+            unix_now_ms() + CLOSE_GRACE_MS,
+        ) else {
+            return;
+        };
+        for &id in &pc.awaiting {
+            write_chars_to_pane_id("/exit\r", PaneId::Terminal(id));
+        }
+        self.pending_close = Some(pc);
+        self.settle_close();
+    }
+
+    fn exec_tab_close(&mut self, tab: usize) {
+        if let Some(manifest) = &self.pane_manifest {
+            if close::actor(manifest, CloseScope::Tab, tab) == Some(self.own_plugin_id) {
+                close_tab_with_index(tab);
+            }
+        }
+    }
+
+    pub fn note_session_end(&mut self, pane_id: u32) {
+        if let Some(pc) = &mut self.pending_close {
+            pc.awaiting.remove(&pane_id);
+        }
+        self.settle_close();
+    }
+
+    fn settle_close(&mut self) {
+        if self
+            .pending_close
+            .as_ref()
+            .map_or(false, |pc| pc.awaiting.is_empty())
+        {
+            self.finish_close();
+        }
+    }
+
+    fn finish_close(&mut self) {
+        let Some(pc) = self.pending_close.take() else {
+            return;
+        };
+        match pc.scope {
+            CloseScope::Pane => {
+                for id in pc.targets {
+                    if self.pane_to_tab.contains_key(&id) {
+                        close_terminal_pane(id);
+                    }
+                }
+            }
+            CloseScope::Tab => {
+                let hand = self
+                    .pane_manifest
+                    .as_ref()
+                    .and_then(|m| close::actor(m, CloseScope::Tab, pc.tab_index));
+                if hand == Some(self.own_plugin_id) {
+                    close_tab_with_index(pc.tab_index);
+                } else {
+                    let mut msg = MessageToPlugin::new("zellaude:exec-close");
+                    msg.message_payload = Some(pc.tab_index.to_string());
+                    pipe_message_to_plugin(msg);
+                }
+            }
+        }
     }
 
     fn merge_sessions(&mut self, incoming: BTreeMap<u32, SessionInfo>) {

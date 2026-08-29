@@ -14,6 +14,7 @@ pub fn handle_hook_event(state: &mut State, payload: HookPayload) {
     // SessionEnd → remove session (never drop: terminal cleanup)
     if event == "SessionEnd" {
         state.sessions.remove(&payload.pane_id);
+        state.note_session_end(payload.pane_id);
         return;
     }
 

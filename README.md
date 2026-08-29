@@ -15,6 +15,7 @@ A Zellij status bar plugin that replaces the default tab bar with Claude Code ac
 - **Desktop notifications** — macOS notification on permission requests (rate-limited to once per 10s per tab), with click-to-focus support via [terminal-notifier](https://github.com/julienXX/terminal-notifier). Auto-dismissed once you respond to the prompt.
 - **Elapsed time** — shows how long a session has been in its current state (after 30s), making it easy to spot stuck sessions
 - **Multi-instance sync** — all Zellij tabs show a unified view of all sessions
+- **Graceful close** — close a pane or tab that hosts Claude by first typing `/exit` into each session and waiting for it to shut down cleanly (so its `SessionEnd` hook fires), then closing. See [Graceful close](#graceful-close-of-claude-panestabs).
 
 ### Activity symbols
 
@@ -155,6 +156,38 @@ brew install terminal-notifier
 ```
 
 Without it, notifications still appear via osascript but clicking them won't focus the pane.
+
+## Graceful close of Claude panes/tabs
+
+Closing a Zellij pane or tab out from under a running Claude session kills the
+process without letting Claude run its shutdown, so the `SessionEnd` hook never
+fires (transcripts, cleanup, and MCP teardown are skipped). Zellaude adds a
+graceful close that ends Claude first.
+
+`install.sh` puts `zellaude-close.sh` next to the plugin. Run it from inside the
+pane you want to close:
+
+```bash
+~/.config/zellij/plugins/zellaude-close.sh        # close this pane
+~/.config/zellij/plugins/zellaude-close.sh tab    # close this pane's whole tab
+```
+
+Bind it to a key in `~/.config/zellij/config.kdl`:
+
+```kdl
+bind "Ctrl q" { Run "bash" "-c" "exec ~/.config/zellij/plugins/zellaude-close.sh tab"; }
+```
+
+What happens: the plugin types `/exit` into every Claude session in the target
+pane/tab, waits for each to exit (its `SessionEnd` hook fires and removes it from
+the bar), then closes the pane/tab. If a session doesn't exit within 10 seconds
+it closes anyway, so a wedged session can't block the close.
+
+The tab close is always performed by a plugin instance in a *different* tab. A
+plugin that closes its own tab from inside its own message handler unloads
+itself mid-call and takes the whole Zellij server down with it — this is the
+crash tracked in [#17](https://github.com/ishefi/zellaude/issues/17); delegating
+the close sidesteps it.
 
 ## Uninstall
 
